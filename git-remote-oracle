@@ -1,0 +1,195 @@
+#!/usr/bin/python3
+
+import time
+import oracledb
+import pexpect
+import os
+import sys
+from configparser import ConfigParser
+from datetime import datetime
+
+DEBUG = ("1" == os.getenv("GR_PSQL_DEBUG"))
+
+def print_fl(*args, **kwargs):
+  print(*args, **kwargs, flush=True)
+
+def print_to_err(*args, **kwargs):
+    print_fl(*args, **kwargs, file=sys.stderr)
+
+def dbgw(s):
+  global DEBUG
+  if DEBUG:
+    print_to_err(s, end='')
+
+def dbg(s):
+  global DEBUG
+  if DEBUG:
+    print_to_err(s)
+
+def read_from_tty():
+  with open("/dev/tty") as tty:
+    res = tty.readline()
+    dbg(f"tty: {res}")
+    return res
+
+def git_credential_fill(protocol, host):
+  child = pexpect.spawn("git credential fill")
+  child.sendline(f"protocol={protocol}")
+  child.readline()
+  child.sendline(f"host={host}")
+  child.readline()
+  child.sendline("")
+  child.readline()
+  prop = None
+  try:
+    child.expect("Username for .*")
+    print_to_err("Username:")
+    child.sendline(read_from_tty())
+    child.readline()
+    child.expect("Password for .*")
+    print_to_err("Password:")
+    child.sendline(read_from_tty())
+    child.readline()
+  except Exception as e:
+    dbg(f"expected 'Username for' {e}")
+    prop = child.before.decode()
+  if prop is None:
+    child.wait()
+    prop = child.read().decode()
+  dbg(f"prop: -->{prop}<--")
+  config = ConfigParser()
+  config.read_string('[config]\n' + prop)
+  dbg(f"config: {config}")
+  return config
+
+def git_credential_approve(protocol, host, username, password):
+  child = pexpect.spawn("git credential approve")
+  child.sendline(f"protocol={protocol}")
+  child.sendline(f"host={host}")
+  child.sendline(f"username={username}")
+  child.sendline(f"password={password}")
+  child.sendline("")
+  child.wait()
+
+def git_credential_reject(protocol, host, username, password):
+  child = pexpect.spawn("git credential reject")
+  child.sendline(f"protocol={protocol}")
+  child.sendline(f"host={host}")
+  child.sendline(f"username={username}")
+  child.sendline(f"password={password}")
+  child.sendline("")
+  child.wait()
+
+def cmd_list():
+  dbg("in func: cmd_list")
+  print_fl(":object-format sha1")
+  print_fl("? refs/heads/main")
+  print_fl("@refs/heads/main HEAD")
+  print_fl("")
+
+def cmd_capabilities():
+  dbg("in func: cmd_capabilities")
+  print_fl("import")
+  print_fl("export")
+  print_fl("refspec refs/heads/*:refs/heads/*")
+  print_fl("")
+
+def commit_block():
+  print_fl("commit refs/heads/main")
+  obj = time.gmtime(0)
+  utcnow = datetime.utcnow()
+  curr_time = round(time.time())
+  print_fl(f"committer <notexisting@notexisting.com> {curr_time} +0000")
+  msg = f"{utcnow}"
+  print_fl(f"data {len(msg)}")
+  print_fl(msg)
+  child = pexpect.spawn("git rev-parse HEAD")
+  id = child.readline()
+  id = id.decode().strip()
+  dbg(f"id: {id}")
+  if((not id.startswith("fatal:")) and (len(id)>10) and ("{id}" != "")):
+    print_fl(f"from {id}")
+
+def print_file_list(file_list):
+  for fl in file_list:
+    print(f"M 100644 :{fl['id']} {fl['name']}")
+  print_fl("")
+
+def cmd_import_MAIN(protocol, host, service_name, schema, port, username, password):
+  dbg("in func: cmd_import")
+  l = sys.stdin.readline()
+  while l.startswith("import"):
+    dbg("  %s" % l)
+    l = sys.stdin.readline()
+
+  print_fl("reset refs/heads/main")
+  try:
+    connection = oracledb.connect(user=username, password=password, host=host, port=1521, service_name=service_name)
+    dbg("connected")
+    cursor = connection.cursor()
+  except:
+    git_credential_reject(protocol, host, username, password)
+    raise
+  git_credential_approve(protocol, host, username, password)
+
+  file_list = []
+  for object_id, object_name, owner, object_type, ddl in cursor.execute("SELECT OBJECT_ID, OBJECT_NAME, OWNER, OBJECT_TYPE, DBMS_METADATA.GET_DDL(object_type, object_name, :2) AS DDL FROM all_objects WHERE OWNER=:1 AND OBJECT_TYPE IN ('PACKAGE')", [schema, schema]):
+      #print(object_name)
+      #print(ddl)
+      print_fl(f"blob")
+      print_fl(f"mark :{object_id}")
+      file_list.append({"id":id, "name":f"{object_type}/{object_name}.sql"})
+  commit_block()
+  print_file_list(file_list)
+  print_fl("done")
+  print_fl("")
+  dbg("end")
+  sys.exit(0)
+
+dbg("START")
+dbg(sys.argv)
+if(sys.argv):
+  if(len(sys.argv)==3):
+    url = sys.argv[2]
+    protocol = "oracle"
+    dbg(url)
+    host_and_path = url[url.index('://')+3:]
+    dbg(f"host_and_path: {host_and_path}")
+    host_and_port = host_and_path[:host_and_path.index('/')]
+    dbg(f"host_and_port: {host_and_port}")
+    port = 1521
+    try:
+      port_pos = host_and_port.index(":")
+      host = host_and_port[:port_pos]
+      port = host_and_port[len(host)+1:]
+    except ValueError:
+      host = host_and_port
+    dbg(f"host: {host}")
+    dbg(f"port: {port}")
+    service_and_schema = host_and_path[len(host_and_port)+1:]
+    dbg(f"service_and_schema: {service_and_schema}")
+    service, schema = service_and_schema.split('/')
+    dbg(f"service: {service}")
+    dbg(f"schema: {schema}")
+    config = git_credential_fill(protocol, host)
+    dbg(f"config: {config}")
+    username = config["config"]["username"]
+    password = config["config"]["password"]
+
+    while True:
+      cmd = sys.stdin.readline()
+      cmd = cmd.strip()
+      if len(cmd) > 0:
+        dbg(f"cmd: {cmd}")
+        if(cmd == "capabilities"):
+          cmd_capabilities()
+        elif(cmd == "list"):
+          cmd_list()
+        elif(cmd == "import refs/heads/main"):
+          cmd_import_MAIN(protocol=protocol,
+           host=host,
+           service_name=service,
+           schema=schema,
+           port=port,
+           username=username,
+           password=password)
