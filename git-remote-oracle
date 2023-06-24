@@ -145,7 +145,6 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
       print_fl(f"mark :{object_id}")
       print_fl(f"data {len(ddl_str)}")
       print_fl(ddl_str)
-      print_fl("\n")
       file_list.append({"id":id, "name":f"{object_type}/{object_name}.sql"})
   commit_block()
   print_file_list(file_list)
