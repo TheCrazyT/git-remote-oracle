@@ -136,7 +136,7 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
   git_credential_approve(protocol, host, username, password)
 
   file_list = []
-  for object_id, object_name, owner, object_type, ddl in cursor.execute("SELECT OBJECT_ID, OBJECT_NAME, OWNER, OBJECT_TYPE, DBMS_METADATA.GET_DDL(REPLACE(object_type,' ','_'), object_name, UPPER(:2)) AS DDL FROM all_objects WHERE lower(OWNER)=lower(:1) AND OBJECT_TYPE IN ('PACKAGE',''PACKAGE BODY')", [schema, username]):
+  for object_id, object_name, owner, object_type, ddl in cursor.execute("SELECT OBJECT_ID, OBJECT_NAME, OWNER, OBJECT_TYPE, DBMS_METADATA.GET_DDL(REPLACE(object_type,' ','_'), object_name, UPPER(:2)) AS DDL FROM all_objects WHERE lower(OWNER)=lower(:1) AND OBJECT_TYPE IN ('PACKAGE','PACKAGE BODY')", [schema, username]):
       #print(object_name)
       #print(ddl)
       ddl_str = ddl.read()
