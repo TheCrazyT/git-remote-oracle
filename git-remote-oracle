@@ -8,7 +8,7 @@ import sys
 from configparser import ConfigParser
 from datetime import datetime
 
-DEBUG = ("1" == os.getenv("GR_PSQL_DEBUG"))
+DEBUG = ("1" == os.getenv("GR_ORACLE_DEBUG"))
 
 def print_fl(*args, **kwargs):
   print(*args, **kwargs, flush=True)
