@@ -9,9 +9,12 @@ from configparser import ConfigParser
 from datetime import datetime
 
 DEBUG = ("1" == os.getenv("GR_ORACLE_DEBUG"))
+DEBUG_GIT_OUTPUT = ("1" == os.getenv("GR_ORACLE_DEBUG_GIT"))
 
 def print_fl(*args, **kwargs):
   print(*args, **kwargs, flush=True)
+  if DEBUG_GIT_OUTPUT:
+    print_to_err(*args, **kwargs)
 
 def print_to_err(*args, **kwargs):
     print_fl(*args, **kwargs, file=sys.stderr)
