@@ -10,6 +10,7 @@ from datetime import datetime
 
 DEBUG = ("1" == os.getenv("GR_ORACLE_DEBUG"))
 DEBUG_GIT_OUTPUT = ("1" == os.getenv("GR_ORACLE_DEBUG_GIT"))
+DATETIME_FORMAT = "%d.%m.%Y %H:%M:%S"
 
 def print_fl(*args, **kwargs):
   print(*args, **kwargs, flush=True)
@@ -97,13 +98,13 @@ def cmd_capabilities():
   print_fl("refspec refs/heads/*:refs/heads/*")
   print_fl("")
 
-def commit_block():
+def commit_block(curr_time, formatted_datetime, last_ddl):
   print_fl("commit refs/heads/main")
-  obj = time.gmtime(0)
-  utcnow = datetime.utcnow()
-  curr_time = round(time.time())
   print_fl(f"committer <notexisting@notexisting.com> {curr_time} +0000")
-  msg = f"{utcnow}"
+  if last_ddl is None:
+    msg = f"> {formatted_datetime}"
+  else:
+    msg = f"> {formatted_datetime}, <= {last_ddl}"
   print_fl(f"data {len(msg)}")
   print_fl(msg)
   child = pexpect.spawn("git rev-parse HEAD")
@@ -119,6 +120,7 @@ def print_file_list(file_list):
   print_fl("")
 
 def cmd_import_MAIN(protocol, host, service_name, schema, port, username, password):
+  global DATETIME_FORMAT
   dbg("in func: cmd_import")
   l = sys.stdin.readline()
   while l.startswith("import"):
@@ -134,19 +136,67 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
     git_credential_reject(protocol, host, username, password)
     raise
   git_credential_approve(protocol, host, username, password)
-
+  
+  last_ddl = None
+  last_ddl_time = datetime.strptime("01.01.1900 00:00:00", DATETIME_FORMAT)
+  git_dir = os.getenv("GIT_DIR")
+  dbg(f"GIT_DIR: {git_dir}")
+  last_ddl_path = os.path.abspath(f"{git_dir}/../last_ddl")
+  dbg(f"last_ddl_path: {last_ddl_path}")
+  if os.path.isfile(last_ddl_path):
+    with open(last_ddl_path, 'r') as f:
+      last_ddl = f.read()
+      last_ddl_time = datetime.strptime(last_ddl, DATETIME_FORMAT)
+  dbg(f"last_ddl_time: {last_ddl_time}")
   file_list = []
-  for object_id, object_name, owner, object_type, ddl in cursor.execute("SELECT OBJECT_ID, OBJECT_NAME, OWNER, OBJECT_TYPE, DBMS_METADATA.GET_DDL(REPLACE(object_type,' ','_'), object_name, UPPER(:2)) AS DDL FROM all_objects WHERE lower(OWNER)=lower(:1) AND OBJECT_TYPE IN ('PACKAGE','PACKAGE BODY')", [schema, username]):
-      #print(object_name)
-      #print(ddl)
-      ddl_str = ddl.read()
-      dbg(f"object_name: {object_name}")
-      print_fl(f"blob")
-      print_fl(f"mark :{object_id}")
-      print_fl(f"data {len(ddl_str)}")
-      print_fl(ddl_str)
-      file_list.append({"id":f"{object_id}", "name":f"{object_type}/{object_name}.sql"})
-  commit_block()
+  qry = """
+    SELECT 
+      OBJECT_ID,
+      OBJECT_NAME,
+      OWNER,
+      OBJECT_TYPE,
+      DBMS_METADATA.GET_DDL(REPLACE(object_type,' ','_'), object_name, UPPER(:2)) AS DDL
+    FROM all_objects
+    WHERE 
+      lower(OWNER) = lower(:1)
+      AND OBJECT_TYPE IN (
+        'PACKAGE',
+        'PACKAGE BODY',
+        'VIEW',
+        'TABLE',
+        'PROCEDURE',
+        'FUNCTION',
+        'INDEX',
+        'TYPE',
+        'TYPE BODY'
+      )
+      AND LAST_DDL_TIME > :3
+    """
+  dbg(f"qry: {qry}")
+  for object_id, object_name, owner, object_type, ddl in cursor.execute(qry, [schema, username, last_ddl_time]):
+    #print(object_name)
+    #print(ddl)
+    ddl_str = ddl.read()
+    dbg(f"object_name: {object_name}")
+    print_fl(f"blob")
+    print_fl(f"mark :{object_id}")
+    print_fl(f"data {len(ddl_str)}")
+    print_fl(ddl_str)
+    file_list.append({"id":f"{object_id}", "name":f"{object_type}/{object_name}.sql"})
+  
+  utcnow = datetime.utcnow()
+  formatted_datetime = utcnow.strftime(DATETIME_FORMAT)
+  curr_time = round(time.time())
+  
+  str = f"{formatted_datetime}"
+  print_fl(f"blob")
+  print_fl(f"mark :1")
+  print_fl(f"data {len(str)}")
+  print_fl(str)
+  
+  commit_block(curr_time, formatted_datetime, last_ddl)
+  file_list.append({"id":"1", "name":"last_ddl"})
+  
   print_file_list(file_list)
   print_fl("done")
   print_fl("")
