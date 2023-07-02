@@ -10,6 +10,7 @@ from datetime import datetime
 
 DEBUG = ("1" == os.getenv("GR_ORACLE_DEBUG"))
 DEBUG_GIT_OUTPUT = ("1" == os.getenv("GR_ORACLE_DEBUG_GIT"))
+CONNECT_AS_SYSDBA = ("1" == os.getenv("GR_ORACLE_SYSDBA"))
 DATETIME_FORMAT = "%d.%m.%Y %H:%M:%S"
 
 def print_fl(*args, **kwargs):
@@ -129,7 +130,10 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
 
   print_fl("reset refs/heads/main")
   try:
-    connection = oracledb.connect(user=username, password=password, host=host, port=1521, service_name=service_name)
+    if CONNECT_AS_SYSDBA:
+      connection = oracledb.connect(user=username, password=password, host=host, port=1521, service_name=service_name, mode=oracledb.AUTH_MODE_SYSDBA)
+    else:
+      connection = oracledb.connect(user=username, password=password, host=host, port=1521, service_name=service_name)
     dbg("connected")
     cursor = connection.cursor()
   except:
@@ -168,9 +172,18 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
         'FUNCTION',
         'INDEX',
         'TYPE',
-        'TYPE BODY'
+        'TYPE BODY',
+        'SYNONYM',
+        -- 'JOB',
+        'JAVA SOURCE',
+        'JAVA RESOURCE'
       )
+      AND SHARING <> 'METADATA LINK'
       AND LAST_DDL_TIME > :3
+      AND GENERATED = 'N'
+      AND TEMPORARY = 'N'
+      AND ORACLE_MAINTAINED = 'N'
+    ORDER BY OBJECT_ID
     """
   dbg(f"qry: {qry}")
   for object_id, object_name, owner, object_type, ddl in cursor.execute(qry, [schema, username, last_ddl_time]):
