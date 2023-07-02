@@ -1,5 +1,3 @@
-#!/usr/bin/python3
-
 import time
 import oracledb
 import pexpect
@@ -216,50 +214,54 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
   dbg("end")
   sys.exit(0)
 
-dbg("START")
-dbg(sys.argv)
-if(sys.argv):
-  if(len(sys.argv)==3):
-    url = sys.argv[2]
-    protocol = "oracle"
-    dbg(url)
-    host_and_path = url[url.index('://')+3:]
-    dbg(f"host_and_path: {host_and_path}")
-    host_and_port = host_and_path[:host_and_path.index('/')]
-    dbg(f"host_and_port: {host_and_port}")
-    port = 1521
-    try:
-      port_pos = host_and_port.index(":")
-      host = host_and_port[:port_pos]
-      port = host_and_port[len(host)+1:]
-    except ValueError:
-      host = host_and_port
-    dbg(f"host: {host}")
-    dbg(f"port: {port}")
-    service_and_schema = host_and_path[len(host_and_port)+1:]
-    dbg(f"service_and_schema: {service_and_schema}")
-    service, schema = service_and_schema.split('/')
-    dbg(f"service: {service}")
-    dbg(f"schema: {schema}")
-    config = git_credential_fill(protocol, host)
-    dbg(f"config: {config}")
-    username = config["config"]["username"]
-    password = config["config"]["password"]
+def main_cli():
+  dbg("START")
+  dbg(sys.argv)
+  if(sys.argv):
+    if(len(sys.argv)==3):
+      url = sys.argv[2]
+      protocol = "oracle"
+      dbg(url)
+      host_and_path = url[url.index('://')+3:]
+      dbg(f"host_and_path: {host_and_path}")
+      host_and_port = host_and_path[:host_and_path.index('/')]
+      dbg(f"host_and_port: {host_and_port}")
+      port = 1521
+      try:
+        port_pos = host_and_port.index(":")
+        host = host_and_port[:port_pos]
+        port = host_and_port[len(host)+1:]
+      except ValueError:
+        host = host_and_port
+      dbg(f"host: {host}")
+      dbg(f"port: {port}")
+      service_and_schema = host_and_path[len(host_and_port)+1:]
+      dbg(f"service_and_schema: {service_and_schema}")
+      service, schema = service_and_schema.split('/')
+      dbg(f"service: {service}")
+      dbg(f"schema: {schema}")
+      config = git_credential_fill(protocol, host)
+      dbg(f"config: {config}")
+      username = config["config"]["username"]
+      password = config["config"]["password"]
 
-    while True:
-      cmd = sys.stdin.readline()
-      cmd = cmd.strip()
-      if len(cmd) > 0:
-        dbg(f"cmd: {cmd}")
-        if(cmd == "capabilities"):
-          cmd_capabilities()
-        elif(cmd == "list"):
-          cmd_list()
-        elif(cmd == "import refs/heads/main"):
-          cmd_import_MAIN(protocol=protocol,
-           host=host,
-           service_name=service,
-           schema=schema,
-           port=port,
-           username=username,
-           password=password)
+      while True:
+        cmd = sys.stdin.readline()
+        cmd = cmd.strip()
+        if len(cmd) > 0:
+          dbg(f"cmd: {cmd}")
+          if(cmd == "capabilities"):
+            cmd_capabilities()
+          elif(cmd == "list"):
+            cmd_list()
+          elif(cmd == "import refs/heads/main"):
+            cmd_import_MAIN(protocol=protocol,
+            host=host,
+            service_name=service,
+            schema=schema,
+            port=port,
+            username=username,
+            password=password)
+
+if __name__ == "__main__":
+  main_cli()

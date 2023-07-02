@@ -2,7 +2,7 @@
 requires = ["setuptools>=61"]
 
 [project]
-name = "git_remote_oracle_crazyt"
+name = "git_remote_oracle"
 version = "0.0.1"
 authors = [
   { name="CrazyT", email="crazyt2019+gro@gmail.com" },
@@ -19,6 +19,9 @@ dependencies = [
   "pexpect",
   "oracledb"
 ]
+
+[project.scripts]
+git-remote-oracle = "git_remote_oracle:main_cli"
 
 [project.urls]
 "Homepage" = "https://github.com/TheCrazyT/git-remote-oracle"
