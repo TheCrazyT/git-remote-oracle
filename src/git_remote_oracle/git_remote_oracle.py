@@ -153,17 +153,24 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
   file_list = []
   qry = """
     SELECT 
-      OBJECT_ID,
-      OBJECT_NAME,
-      OWNER,
-      OBJECT_TYPE,
-      DBMS_METADATA.GET_DDL(REPLACE(object_type,' ','_'), object_name, UPPER(:2)) AS DDL
+      object_id,
+      object_name,
+      owner,
+      object_type,
+      DBMS_METADATA.GET_DDL(REPLACE(DECODE(
+							object_type,
+							'PACKAGE','PACKAGE SPEC',
+							'TYPE','TYPE SPEC',
+							'JOB','PROCOBJ',
+							object_type 
+						),' ','_'), object_name, UPPER(:2)) AS DDL
     FROM all_objects
     WHERE 
-      lower(OWNER) = lower(:1)
-      AND OBJECT_TYPE IN (
+      lower(owner) = lower(:1)
+      AND object_type IN (
         'PACKAGE',
         'PACKAGE BODY',
+        'TRIGGER',
         'VIEW',
         'TABLE',
         'PROCEDURE',
@@ -172,16 +179,16 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
         'TYPE',
         'TYPE BODY',
         'SYNONYM',
-        -- 'JOB',
+        'JOB',
         'JAVA SOURCE',
         'JAVA RESOURCE'
       )
-      AND SHARING <> 'METADATA LINK'
-      AND LAST_DDL_TIME > :3
-      AND GENERATED = 'N'
-      AND TEMPORARY = 'N'
-      AND ORACLE_MAINTAINED = 'N'
-    ORDER BY OBJECT_ID
+      AND sharing <> 'METADATA LINK'
+      AND last_ddl_time > :3
+      AND generated = 'N'
+      AND temporary = 'N'
+      AND oracle_maintained = 'N'
+    ORDER BY object_id
     """
   dbg(f"qry: {qry}")
   for object_id, object_name, owner, object_type, ddl in cursor.execute(qry, [schema, username, last_ddl_time]):
