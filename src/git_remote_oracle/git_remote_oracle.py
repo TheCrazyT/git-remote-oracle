@@ -191,7 +191,7 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
     ORDER BY object_id
     """
   dbg(f"qry: {qry}")
-  for object_id, object_name, owner, object_type, ddl in cursor.execute(qry, [schema, username, last_ddl_time]):
+  for object_id, object_name, owner, object_type, ddl in cursor.execute(qry, [schema, schema, last_ddl_time]):
     #print(object_name)
     #print(ddl)
     ddl_str = ddl.read()

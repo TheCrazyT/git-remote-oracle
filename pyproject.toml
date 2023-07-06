@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 
 [project]
 name = "git_remote_oracle"
-version = "0.0.2"
+version = "0.0.3"
 authors = [
   { name="CrazyT", email="crazyt2019+gro@gmail.com" },
 ]
@@ -26,3 +26,6 @@ git-remote-oracle = "git_remote_oracle:main_cli"
 [project.urls]
 "Homepage" = "https://github.com/TheCrazyT/git-remote-oracle"
 "Bug Tracker" = "https://github.com/TheCrazyT/git-remote-oracle/issues"
+
+[tool.setuptools.packages.find]
+exclude = ["*.ipynb"]
