@@ -1,8 +1,9 @@
 [build-system]
 requires = ["setuptools>=61"]
+build-backend = 'setuptools.build_meta'
 
 [project]
-name = "git_remote_oracle"
+name = "git-remote-oracle"
 version = "0.0.4"
 authors = [
   { name="CrazyT", email="crazyt2019+gro@gmail.com" },
@@ -29,3 +30,4 @@ git-remote-oracle = "git_remote_oracle:main_cli"
 
 [tool.setuptools.packages.find]
 exclude = ["*.ipynb"]
+include = ["git_remote_oracle"]
