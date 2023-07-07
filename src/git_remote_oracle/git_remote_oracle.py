@@ -1,3 +1,7 @@
+# documentation links:
+#  https://git-scm.com/docs/gitremote-helpers
+#  https://git-scm.com/docs/git-fast-import
+
 import time
 import oracledb
 import pexpect
@@ -10,6 +14,8 @@ DEBUG = ("1" == os.getenv("GR_ORACLE_DEBUG"))
 DEBUG_GIT_OUTPUT = ("1" == os.getenv("GR_ORACLE_DEBUG_GIT"))
 CONNECT_AS_SYSDBA = ("1" == os.getenv("GR_ORACLE_SYSDBA"))
 DATETIME_FORMAT = "%d.%m.%Y %H:%M:%S"
+PROGRESS = True
+BATCH_SIZE = 20 if (os.getenv("GR_ORACLE_BATCHSIZE") is None) else int(os.getenv("GR_ORACLE_BATCHSIZE"))
 
 def print_fl(*args, **kwargs):
   print(*args, **kwargs, flush=True)
@@ -90,11 +96,38 @@ def cmd_list():
   print_fl("@refs/heads/main HEAD")
   print_fl("")
 
+def cmd_option_verbosity(params):
+  global DEBUG, DEBUG_GIT_OUTPUT
+  param_val = int(params)
+  if param_val > 0:
+    DEBUG = True
+  if param_val > 1:
+    DEBUG_GIT_OUTPUT = True
+
+def cmd_option_progress(params):
+  global PROGRESS
+  if params == "true":
+    PROGRESS = True
+  else:
+    PROGRESS = False
+
+def cmd_option(params):
+  dbg("in func: cmd_option")
+  if(params.startswith("verbosity")):
+    params = int(params[len("verbosity "):])
+    cmd_option_verbosity(params)
+  elif(params.startswith("progress ")):
+    params = int(params[len("progress  "):])
+    cmd_option_progress(params)
+  else:
+    print_fl("unsupported")
+
 def cmd_capabilities():
   dbg("in func: cmd_capabilities")
   print_fl("import")
   print_fl("export")
   print_fl("refspec refs/heads/*:refs/heads/*")
+  print_fl("option")
   print_fl("")
 
 def commit_block(curr_time, formatted_datetime, last_ddl):
@@ -117,6 +150,37 @@ def print_file_list(file_list):
   for fl in file_list:
     print_fl(f"M 100644 :{fl['id']} {fl['name']}")
   print_fl("")
+
+def build_query(columns):
+  return """
+    SELECT 
+      """ + columns + """
+    FROM all_objects
+    WHERE 
+      lower(owner) = lower(:1)
+      AND object_type IN (
+        'PACKAGE',
+        'PACKAGE BODY',
+        'TRIGGER',
+        'VIEW',
+        'TABLE',
+        'PROCEDURE',
+        'FUNCTION',
+        'INDEX',
+        'TYPE',
+        'TYPE BODY',
+        'SYNONYM',
+        'JOB',
+        'JAVA SOURCE',
+        'JAVA RESOURCE'
+      )
+      AND sharing <> 'METADATA LINK'
+      AND last_ddl_time > :3
+      AND generated = 'N'
+      AND temporary = 'N'
+      AND oracle_maintained = 'N'
+    ORDER BY object_id
+    """
 
 def cmd_import_MAIN(protocol, host, service_name, schema, port, username, password):
   global DATETIME_FORMAT
@@ -151,8 +215,9 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
       last_ddl_time = datetime.strptime(last_ddl, DATETIME_FORMAT)
   dbg(f"last_ddl_time: {last_ddl_time}")
   file_list = []
-  qry = """
-    SELECT 
+  if PROGRESS:
+    print_fl(f"progress 1/?")
+  qry_columns = """
       object_id,
       object_name,
       owner,
@@ -164,43 +229,38 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
 							'JOB','PROCOBJ',
 							object_type 
 						),' ','_'), object_name, UPPER(:2)) AS DDL
-    FROM all_objects
-    WHERE 
-      lower(owner) = lower(:1)
-      AND object_type IN (
-        'PACKAGE',
-        'PACKAGE BODY',
-        'TRIGGER',
-        'VIEW',
-        'TABLE',
-        'PROCEDURE',
-        'FUNCTION',
-        'INDEX',
-        'TYPE',
-        'TYPE BODY',
-        'SYNONYM',
-        'JOB',
-        'JAVA SOURCE',
-        'JAVA RESOURCE'
-      )
-      AND sharing <> 'METADATA LINK'
-      AND last_ddl_time > :3
-      AND generated = 'N'
-      AND temporary = 'N'
-      AND oracle_maintained = 'N'
-    ORDER BY object_id
-    """
+  """
+  qry_cnt = build_query("COUNT(*) AS cnt,:2 AS ignore")
+  res = cursor.execute(qry_cnt, [schema, schema, last_ddl_time])
+  if PROGRESS:
+    print_fl(f"progress 2/?")
+  
+  qry = build_query(qry_columns)
   dbg(f"qry: {qry}")
-  for object_id, object_name, owner, object_type, ddl in cursor.execute(qry, [schema, schema, last_ddl_time]):
-    #print(object_name)
-    #print(ddl)
-    ddl_str = ddl.read()
-    dbg(f"object_name: {object_name}")
-    print_fl(f"blob")
-    print_fl(f"mark :{object_id}")
-    print_fl(f"data {len(ddl_str)}")
-    print_fl(ddl_str)
-    file_list.append({"id":f"{object_id}", "name":f"{object_type}/{object_name}.sql"})
+  total = res.fetchone()[0]
+
+  for i in range(0,total-1,BATCH_SIZE):
+    qry_offset = f"""
+     OFFSET {i} ROWS FETCH NEXT {BATCH_SIZE} ROWS ONLY
+    """
+    row = cursor.execute(qry+qry_offset, [schema, schema, last_ddl_time])
+    while True:
+      row = cursor.fetchone()
+      if row is None:
+          break
+      object_id, object_name, owner, object_type, ddl = row
+      i += 1
+      #print(object_name)
+      #print(ddl)
+      ddl_str = ddl.read()
+      dbg(f"object_name: {object_name}")
+      print_fl(f"blob")
+      print_fl(f"mark :{object_id}")
+      print_fl(f"data {len(ddl_str)}")
+      print_fl(ddl_str)
+      file_list.append({"id":f"{object_id}", "name":f"{object_type}/{object_name}.sql"})
+      if PROGRESS:
+        print_fl(f"progress {i+2}/{total+2}")
   
   utcnow = datetime.utcnow()
   formatted_datetime = utcnow.strftime(DATETIME_FORMAT)
@@ -261,6 +321,9 @@ def main_cli():
             cmd_capabilities()
           elif(cmd == "list"):
             cmd_list()
+          elif(cmd.startswith("option")):
+            params = cmd[len("option "):]
+            cmd_option(params)
           elif(cmd == "import refs/heads/main"):
             cmd_import_MAIN(protocol=protocol,
             host=host,
