@@ -260,13 +260,17 @@ def cmd_option_verbosity(params):
     DEBUG = True
   if param_val > 1:
     DEBUG_GIT_OUTPUT = True
+  print_fl("")
 
 def cmd_option_progress(params):
   global PROGRESS
+  dbg("in func: cmd_option_progress")
+  dbg(f" progress: {params}")
   if params == "true":
     PROGRESS = True
   else:
     PROGRESS = False
+  print_fl("")
 
 def cmd_option(params):
   dbg("in func: cmd_option")
@@ -274,7 +278,7 @@ def cmd_option(params):
     params = int(params[len("verbosity "):])
     cmd_option_verbosity(params)
   elif(params.startswith("progress ")):
-    params = int(params[len("progress  "):])
+    params = params[len("progress "):]
     cmd_option_progress(params)
   else:
     print_fl("unsupported")
