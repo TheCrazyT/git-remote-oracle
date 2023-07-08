@@ -16,11 +16,30 @@ CONNECT_AS_SYSDBA = ("1" == os.getenv("GR_ORACLE_SYSDBA"))
 DATETIME_FORMAT = "%d.%m.%Y %H:%M:%S"
 PROGRESS = True
 BATCH_SIZE = 20 if (os.getenv("GR_ORACLE_BATCHSIZE") is None) else int(os.getenv("GR_ORACLE_BATCHSIZE"))
+OBJECT_TYPES = ['PACKAGE',
+                'PACKAGE BODY',
+                'TRIGGER',
+                'VIEW',
+                'TABLE',
+                'PROCEDURE',
+                'FUNCTION',
+                'INDEX',
+                'TYPE',
+                'TYPE BODY',
+                'SYNONYM',
+                'JOB',
+                'JAVA SOURCE',
+                'JAVA RESOURCE']
+GIT_DIR = os.getenv("GIT_DIR")
 
 def print_fl(*args, **kwargs):
   print(*args, **kwargs, flush=True)
   if DEBUG_GIT_OUTPUT and ('file' not in kwargs):
-    print_to_err(*args, **kwargs)
+    if len(args) > 1:
+      args2 = [f"> {args[0]}", *args[1]]
+    else:
+      args2 = [f"> {args[0]}"]
+    print_to_err(*args2, **kwargs)
 
 def print_to_err(*args, **kwargs):
     print_fl(*args, **kwargs, file=sys.stderr)
@@ -89,6 +108,144 @@ def git_credential_reject(protocol, host, username, password):
   child.sendline("")
   child.wait()
 
+def commit_block(curr_time, formatted_datetime, last_ddl):
+  print_fl("commit refs/heads/main")
+  print_fl(f"committer <notexisting@notexisting.com> {curr_time} +0000")
+  if last_ddl is None:
+    msg = f"> {formatted_datetime}"
+  else:
+    msg = f"> {formatted_datetime}, <= {last_ddl}"
+  print_fl(f"data {len(msg)}")
+  print_fl(msg)
+  child = pexpect.spawn("git rev-parse HEAD")
+  id = child.readline()
+  id = id.decode().strip()
+  dbg(f"id: {id}")
+  if((not id.startswith("fatal:")) and (len(id)>10) and ("{id}" != "")):
+    print_fl(f"from {id}")
+
+def print_file_list(file_list):
+  for fl in file_list:
+    print_fl(f"M 100644 :{fl['id']} {fl['name']}")
+
+def print_deleted_file_list(file_list):
+  for fl in file_list:
+    print_fl(f"D {fl['name']}")
+
+def find_existing_objects():
+  global GIT_DIR
+  result = []
+  real_names = []
+  workspace = os.path.abspath(f"{GIT_DIR}/..")
+  for object_type in OBJECT_TYPES:
+    if os.path.isdir(f"{workspace}/{object_type}"):
+      for file in os.listdir(f"{workspace}/{object_type}"):
+        name = file.replace(".sql","")
+        result.append((object_type.lower(), name.lower()))
+        real_names.append((object_type, name))
+  return result, real_names
+
+def get_deleted_file_list(cursor, schema):
+  global OBJECT_TYPES
+  obj_types = ",".join([f"'{t}'" for t in OBJECT_TYPES])
+  existing_objects, real_names = find_existing_objects()
+  if len(existing_objects) > 0:
+    result = []
+    qry = """
+      SELECT 
+        object_type, object_name
+      FROM all_objects
+      WHERE
+        lower(owner) = lower(:1)
+        AND object_type IN (""" + obj_types + """)
+        AND sharing <> 'METADATA LINK'
+        AND generated = 'N'
+        AND temporary = 'N'
+        AND oracle_maintained = 'N'
+      """
+    dbg(f"qry: {qry}")
+    res = cursor.execute(qry, [schema])
+    db_objects = []
+    for r in res.fetchall():
+      db_objects.append((r[0].lower(), r[1].lower()))
+    i = 0
+    for r in existing_objects:
+      if r not in db_objects:
+        r = real_names[i]
+        result.append({"name": f"{r[0]}/{r[1]}.sql"})
+      i += 1
+    return result
+  else:
+    return []
+
+def build_query(columns):
+  global OBJECT_TYPES
+
+  obj_types = ",".join([f"'{t}'" for t in OBJECT_TYPES])
+
+  return """
+    SELECT 
+      """ + columns + """
+    FROM all_objects
+    WHERE 
+      lower(owner) = lower(:1)
+      AND object_type IN (""" + obj_types + """)
+      AND sharing <> 'METADATA LINK'
+      AND last_ddl_time > :3
+      AND generated = 'N'
+      AND temporary = 'N'
+      AND oracle_maintained = 'N'
+    ORDER BY object_id
+    """
+
+def create_file_list(cursor, schema, last_ddl_time):
+  global PROGRESS
+  qry_columns = """
+      object_id,
+      object_name,
+      owner,
+      object_type,
+      DBMS_METADATA.GET_DDL(REPLACE(DECODE(
+							object_type,
+							'PACKAGE','PACKAGE SPEC',
+							'TYPE','TYPE SPEC',
+							'JOB','PROCOBJ',
+							object_type 
+						),' ','_'), object_name, UPPER(:2)) AS DDL
+  """
+  qry_cnt = build_query("COUNT(*) AS cnt,:2 AS ignore")
+  dbg(f"qry_cnt: {qry_cnt}")
+  res = cursor.execute(qry_cnt, [schema, schema, last_ddl_time])
+  if PROGRESS:
+    print_fl(f"progress 2/?")
+  
+  qry = build_query(qry_columns)
+  dbg(f"qry: {qry}")
+  total = res.fetchone()[0]
+
+  file_list = []
+  for i in range(0,total-1,BATCH_SIZE):
+    qry_offset = f"""
+    OFFSET {i} ROWS FETCH NEXT {BATCH_SIZE} ROWS ONLY
+  """
+    row = cursor.execute(qry+qry_offset, [schema, schema, last_ddl_time])
+    while True:
+      row = cursor.fetchone()
+      if row is None:
+          break
+      object_id, object_name, owner, object_type, ddl = row
+      i += 1
+      ddl_str = ddl.read()
+      dbg(f"object_name: {object_name}")
+      print_fl(f"blob")
+      print_fl(f"mark :{object_id}")
+      print_fl(f"data {len(ddl_str)}")
+      print_fl(ddl_str)
+      file_list.append({"id":f"{object_id}", "name":f"{object_type}/{object_name}.sql"})
+      if PROGRESS:
+        print_fl(f"progress {i+2}/{total+2}")
+  return file_list
+
 def cmd_list():
   dbg("in func: cmd_list")
   print_fl(":object-format sha1")
@@ -130,60 +287,8 @@ def cmd_capabilities():
   print_fl("option")
   print_fl("")
 
-def commit_block(curr_time, formatted_datetime, last_ddl):
-  print_fl("commit refs/heads/main")
-  print_fl(f"committer <notexisting@notexisting.com> {curr_time} +0000")
-  if last_ddl is None:
-    msg = f"> {formatted_datetime}"
-  else:
-    msg = f"> {formatted_datetime}, <= {last_ddl}"
-  print_fl(f"data {len(msg)}")
-  print_fl(msg)
-  child = pexpect.spawn("git rev-parse HEAD")
-  id = child.readline()
-  id = id.decode().strip()
-  dbg(f"id: {id}")
-  if((not id.startswith("fatal:")) and (len(id)>10) and ("{id}" != "")):
-    print_fl(f"from {id}")
-
-def print_file_list(file_list):
-  for fl in file_list:
-    print_fl(f"M 100644 :{fl['id']} {fl['name']}")
-  print_fl("")
-
-def build_query(columns):
-  return """
-    SELECT 
-      """ + columns + """
-    FROM all_objects
-    WHERE 
-      lower(owner) = lower(:1)
-      AND object_type IN (
-        'PACKAGE',
-        'PACKAGE BODY',
-        'TRIGGER',
-        'VIEW',
-        'TABLE',
-        'PROCEDURE',
-        'FUNCTION',
-        'INDEX',
-        'TYPE',
-        'TYPE BODY',
-        'SYNONYM',
-        'JOB',
-        'JAVA SOURCE',
-        'JAVA RESOURCE'
-      )
-      AND sharing <> 'METADATA LINK'
-      AND last_ddl_time > :3
-      AND generated = 'N'
-      AND temporary = 'N'
-      AND oracle_maintained = 'N'
-    ORDER BY object_id
-    """
-
 def cmd_import_MAIN(protocol, host, service_name, schema, port, username, password):
-  global DATETIME_FORMAT
+  global DATETIME_FORMAT, GIT_DIR
   dbg("in func: cmd_import")
   l = sys.stdin.readline()
   while l.startswith("import"):
@@ -205,62 +310,16 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
   
   last_ddl = None
   last_ddl_time = datetime.strptime("01.01.1900 00:00:00", DATETIME_FORMAT)
-  git_dir = os.getenv("GIT_DIR")
-  dbg(f"GIT_DIR: {git_dir}")
-  last_ddl_path = os.path.abspath(f"{git_dir}/../last_ddl")
+  last_ddl_path = os.path.abspath(f"{GIT_DIR}/../last_ddl")
   dbg(f"last_ddl_path: {last_ddl_path}")
   if os.path.isfile(last_ddl_path):
     with open(last_ddl_path, 'r') as f:
       last_ddl = f.read()
       last_ddl_time = datetime.strptime(last_ddl, DATETIME_FORMAT)
   dbg(f"last_ddl_time: {last_ddl_time}")
-  file_list = []
+
   if PROGRESS:
     print_fl(f"progress 1/?")
-  qry_columns = """
-      object_id,
-      object_name,
-      owner,
-      object_type,
-      DBMS_METADATA.GET_DDL(REPLACE(DECODE(
-							object_type,
-							'PACKAGE','PACKAGE SPEC',
-							'TYPE','TYPE SPEC',
-							'JOB','PROCOBJ',
-							object_type 
-						),' ','_'), object_name, UPPER(:2)) AS DDL
-  """
-  qry_cnt = build_query("COUNT(*) AS cnt,:2 AS ignore")
-  res = cursor.execute(qry_cnt, [schema, schema, last_ddl_time])
-  if PROGRESS:
-    print_fl(f"progress 2/?")
-  
-  qry = build_query(qry_columns)
-  dbg(f"qry: {qry}")
-  total = res.fetchone()[0]
-
-  for i in range(0,total-1,BATCH_SIZE):
-    qry_offset = f"""
-     OFFSET {i} ROWS FETCH NEXT {BATCH_SIZE} ROWS ONLY
-    """
-    row = cursor.execute(qry+qry_offset, [schema, schema, last_ddl_time])
-    while True:
-      row = cursor.fetchone()
-      if row is None:
-          break
-      object_id, object_name, owner, object_type, ddl = row
-      i += 1
-      #print(object_name)
-      #print(ddl)
-      ddl_str = ddl.read()
-      dbg(f"object_name: {object_name}")
-      print_fl(f"blob")
-      print_fl(f"mark :{object_id}")
-      print_fl(f"data {len(ddl_str)}")
-      print_fl(ddl_str)
-      file_list.append({"id":f"{object_id}", "name":f"{object_type}/{object_name}.sql"})
-      if PROGRESS:
-        print_fl(f"progress {i+2}/{total+2}")
   
   utcnow = datetime.utcnow()
   formatted_datetime = utcnow.strftime(DATETIME_FORMAT)
@@ -272,16 +331,20 @@ def cmd_import_MAIN(protocol, host, service_name, schema, port, username, passwo
   print_fl(f"data {len(str)}")
   print_fl(str)
   
+  file_list = create_file_list(cursor, schema, last_ddl_time)
   commit_block(curr_time, formatted_datetime, last_ddl)
   file_list.append({"id":"1", "name":"last_ddl"})
   
   print_file_list(file_list)
+  print_deleted_file_list(get_deleted_file_list(cursor, schema))
+  print_fl("")
   print_fl("done")
   print_fl("")
   dbg("end")
   sys.exit(0)
 
 def main_cli():
+  global GIT_DIR
   dbg("START")
   dbg(sys.argv)
   if(sys.argv):
@@ -311,12 +374,14 @@ def main_cli():
       dbg(f"config: {config}")
       username = config["config"]["username"]
       password = config["config"]["password"]
+      dbg(f"GIT_DIR: {GIT_DIR}")
+
 
       while True:
         cmd = sys.stdin.readline()
         cmd = cmd.strip()
         if len(cmd) > 0:
-          dbg(f"cmd: {cmd}")
+          dbg(f"< {cmd}")
           if(cmd == "capabilities"):
             cmd_capabilities()
           elif(cmd == "list"):

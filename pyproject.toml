@@ -4,7 +4,7 @@ build-backend = 'setuptools.build_meta'
 
 [project]
 name = "git-remote-oracle"
-version = "0.0.4"
+version = "0.0.5"
 authors = [
   { name="CrazyT", email="crazyt2019+gro@gmail.com" },
 ]
